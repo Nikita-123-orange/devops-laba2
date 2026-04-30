@@ -24,7 +24,7 @@ services:
       - .:/app
     ports:
       - "8000:8000"
-    image: nikita123orange/devops-laba1:latest
+    image: nikita123orange/devops-laba2:latest
     depends_on:
       db:
         condition: service_healthy
