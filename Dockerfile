@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем весь остальной код
 COPY . .
 
-CMD ["sh", "-c", "python -c 'from src.scripts.init_db import init_db; init_db()' && python -m uvicorn src.api]
+CMD ["sh", "-c", "python -c 'from src.db.database import init_db; init_db()' && python -m main]
