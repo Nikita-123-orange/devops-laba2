@@ -1,25 +1,24 @@
+import json
 from typing import Any
-from fastapi import APIRouter, HTTPException, File, UploadFile
+from fastapi import APIRouter, HTTPException, File, UploadFile, Depends
 from datetime import datetime
 import io
 import numpy as np
 import pandas as pd
 from PIL import Image
+from sqlalchemy.orm import Session
 
 from src.api.model.test import TestResponse, PredictionResponse
 from src.predict import Predictor
 from src.logger import Logger
-
+from src.db.database import get_db
+from src.db import crud
 
 SHOW_LOG = True
 MODEL = "LOG_REG"
 logger = Logger(SHOW_LOG).get_logger(__name__)
 
 router = APIRouter(prefix="/test", tags=["testing"])
-
-
-
-
 
 @router.post("/smoke", response_model=TestResponse)
 async def smoke_test() -> dict[str, Any]:
@@ -62,26 +61,35 @@ async def functional_test() -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Функциональный тест не удался: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Функциональный тест не удался: {str(e)}")
-
+    
 @router.post("/predict", response_model=PredictionResponse)
-async def predict_from_image(file: UploadFile = File(...)) -> dict[str, Any]:
-    """Предсказание по загруженному изображению или CSV-файлу."""
+async def predict_from_image(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)          # <-- добавлено
+) -> dict[str, Any]:
+    """Предсказание по загруженному изображению или CSV-файлу с сохранением в БД."""
     try:
         logger.info(f"Запуск предсказания с моделью: {MODEL}")
         contents = await file.read()
 
-        # Обработка в зависимости от расширения файла
+        # --- обработка файла (CSV или изображение) ---
         if file.filename.endswith('.csv'):
             try:
-                df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+                # Читаем CSV без заголовка, все данные как строки
+                content = contents.decode('utf-8')
+                df = pd.read_csv(io.StringIO(content), header=None)
+                # Преобразуем все столбцы в числа (нечисловые становятся NaN)
+                df = df.apply(pd.to_numeric, errors='coerce')
+                if df.isnull().any().any():
+                    logger.warning("CSV содержит нечисловые значения, они заменены на 0")
+                    df = df.fillna(0)
+                features_np = df.values
             except pd.errors.EmptyDataError:
                 raise HTTPException(400, "CSV-файл пуст или не содержит данных")
             except UnicodeDecodeError:
                 raise HTTPException(400, "Некорректная кодировка CSV-файла")
-            
-            if df.empty:
-                raise HTTPException(400, "CSV-файл пуст")
-            features = df.values
+            except Exception as e:
+                raise HTTPException(400, f"Ошибка обработки CSV: {str(e)}")
         elif file.filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp')):
             image = Image.open(io.BytesIO(contents))
             image_array = np.array(image)
@@ -91,16 +99,24 @@ async def predict_from_image(file: UploadFile = File(...)) -> dict[str, Any]:
                 from PIL import ImageOps
                 image = ImageOps.grayscale(image)
                 image_array = np.array(image)
-            features = image_array.flatten().reshape(1, -1)
+            features_np = image_array.flatten().reshape(1, -1)
         else:
             raise HTTPException(400, f"Неподдерживаемый тип файла: {file.filename}")
 
-        # Проверка наличия данных
-        if features.shape[0] == 0:
+        if features_np.shape[0] == 0:
             raise HTTPException(400, "В загруженном файле нет образцов")
+        features_str = ' '.join(map(str, features_np.flatten())) 
+    
+        predictor = Predictor(model=MODEL)
+        predicted_class, confidence = predictor.predict_from_features(features_np)
 
-        predictor = Predictor(model=MODEL, test_type="smoke")
-        predicted_class, confidence = predictor.predict_from_features(features)
+        saved = crud.create_prediction(
+            db=db,
+            features=features_str,
+            predicted_class=predicted_class,
+            confidence=confidence
+        )
+        logger.info(f"Предсказание сохранено в БД с id={saved.id}")
 
         logger.info(f"Предсказание успешно: класс {predicted_class}, уверенность: {confidence:.4f}")
 

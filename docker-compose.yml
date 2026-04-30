@@ -1,5 +1,22 @@
-version: '3.8'
 services:
+  db:
+    image: postgres:15
+    container_name: penguin_db
+    environment:
+      POSTGRES_USER: ${POSTGRESQL_USER}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD}
+      POSTGRES_DB: ${POSTGRESQL_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER} -d ${POSTGRESQL_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   web:
     build: .
     working_dir: /app
@@ -8,9 +25,21 @@ services:
     ports:
       - "8000:8000"
     image: nikita123orange/devops-laba1:latest
-
-    command: bash -c "
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRESQL_USER}:${POSTGRESQL_PASSWORD}@db:5432/${POSTGRESQL_DB}
+      - PYTHONPATH=/app
+    command: >
+      bash -c "
+        python -c 'from src.db.database import init_db; init_db()' &&
         python -m src.predict &&
         coverage run -a -m src.unit_tests.test_endpoints &&
         (coverage report -m || true) &&
-        python -m main"
+        python -m main
+      "
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
