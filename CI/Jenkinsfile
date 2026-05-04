@@ -6,7 +6,7 @@ pipeline {
         LC_ALL = "en_US.UTF-8"
         LANG    = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
-        POSTGRESQL_HOST = "penguin_db"
+        POSTGRESQL_HOST = "db"
         POSTGRESQL_PORT = "5432"
         POSTGRESQL_DB = "mydb"
         // DVC кэш будет храниться на хосте, чтобы не качать данные повторно

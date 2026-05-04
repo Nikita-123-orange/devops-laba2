@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:15
-    container_name: penguin_db
+    container_name: db
     environment:
       POSTGRES_USER: ${POSTGRESQL_USER}
       POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD}
