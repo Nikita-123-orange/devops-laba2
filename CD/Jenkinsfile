@@ -7,7 +7,7 @@ pipeline {
         LANG    = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
         // Несекретные параметры БД
-        POSTGRESQL_HOST = "db"   
+        POSTGRESQL_HOST = "db"
         POSTGRESQL_PORT = "5432"
         POSTGRESQL_DB   = "mydb"
     }
@@ -18,43 +18,69 @@ pipeline {
     }
 
     stages {
+        stage('Clone repository (for compose file)') {
+            steps {
+                // Если директория уже есть – делаем pull, иначе clone
+                bat '''
+                    if exist devops-laba2 (
+                        cd devops-laba2 && git pull origin main
+                    ) else (
+                        git clone -b main https://github.com/Nikita-123-orange/devops-laba2.git
+                    )
+                '''
+            }
+        }
+
         stage('Login to Docker Hub') {
             steps {
                 bat 'docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
             }
         }
 
-        stage('Pull image') {
+        stage('Pull latest image') {
             steps {
                 bat 'docker pull nikita123orange/devops-laba2:latest'
             }
         }
 
-        stage('Remove old container') {
+        stage('Stop and remove old containers') {
             steps {
-                script {
-                    bat '(docker stop devops-laba-web-1 || exit 0) && (docker rm devops-laba-web-1 || exit 0)'
+                dir('devops-laba2') {
+                    // Останавливаем и удаляем старые контейнеры, но НЕ удаляем том с данными БД
+                    bat 'docker-compose down'
                 }
             }
         }
 
-        stage('Run container') {
+        stage('Run database and web containers') {
             steps {
-                withCredentials([
-                    string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
-                    string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
-                ]) {
-                    bat """
-                        docker run --name devops-laba-web-1 \
-                        -p 8000:8000 \
-                        --network devops-laba2_default \
-                        -e POSTGRESQL_USER=${POSTGRESQL_USER} \
-                        -e POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD} \
-                        -e POSTGRESQL_HOST=${POSTGRESQL_HOST} \
-                        -e POSTGRESQL_PORT=${POSTGRESQL_PORT} \
-                        -e POSTGRESQL_DB=${POSTGRESQL_DB} \
-                        -d nikita123orange/devops-laba2:latest
-                    """
+                script {
+                    dir('devops-laba2') {
+                        // Создаём временный .env файл с секретными переменными
+                        withCredentials([
+                            string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
+                            string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
+                        ]) {
+                            // Записываем переменные в .env (будет проигнорирован .gitignore)
+                            bat """
+                                echo POSTGRESQL_USER=${POSTGRESQL_USER} > .env
+                                echo POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD} >> .env
+                                echo POSTGRESQL_HOST=${POSTGRESQL_HOST} >> .env
+                                echo POSTGRESQL_PORT=${POSTGRESQL_PORT} >> .env
+                                echo POSTGRESQL_DB=${POSTGRESQL_DB} >> .env
+                            """
+                            // Запускаем контейнеры – образ для web уже скачан, пересборки не будет
+                            bat 'docker-compose up -d'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Verify containers are running') {
+            steps {
+                dir('devops-laba2') {
+                    bat 'docker-compose ps'
                 }
             }
         }
@@ -64,6 +90,8 @@ pipeline {
         always {
             node('windows') {
                 bat 'docker logout'
+                // Опционально: удаляем .env файл (чтобы не хранить пароли на диске)
+                bat 'if exist devops-laba2\\.env del devops-laba2\\.env'
             }
         }
     }
