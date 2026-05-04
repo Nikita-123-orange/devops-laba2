@@ -67,7 +67,7 @@ class TestEndpoints(unittest.TestCase):
 
         files = {"file": ("test.csv", content, "text/csv")}
         response = client.post(self.predict_url, files=files)
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["model"], "LOG_REG")
@@ -90,7 +90,7 @@ class TestEndpoints(unittest.TestCase):
 
         files = {"file": ("test_image.png", content, "image/png")}
         response = client.post(self.predict_url, files=files)
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "success")
         self.assertEqual(data["model"], "LOG_REG")
