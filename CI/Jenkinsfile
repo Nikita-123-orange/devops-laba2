@@ -6,19 +6,23 @@ pipeline {
         LC_ALL = "en_US.UTF-8"
         LANG    = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
+        POSTGRESQL_HOST = "penguin_db"
+        POSTGRESQL_PORT = "5432"
+        POSTGRESQL_DB = "mydb"
     }
 
-options {
+    options {
         timestamps()
         skipDefaultCheckout(true)
-	}
+    }
+
     stages {
         stage('Clone github repository') {
             steps {
                 cleanWs()
                 bat 'chcp 65001 && git clone -b main https://github.com/Nikita-123-orange/devops-laba2.git'
-				}
-			}
+            }
+        }
 
         stage('Checkout repo dir') {
             steps {
@@ -32,55 +36,44 @@ options {
                 //bat 'chcp 65001 && echo %DOCKER_REGISTRY_PWD% | docker login -u %DOCKER_REGISTRY_USER% --password-stdin'}
                 //bat 'chcp 65001 && echo %DOCKERHUB_CREDS_PSW% | docker login -u %DOCKERHUB_CREDS_USR% --password-stdin'
                 bat 'chcp 65001 && docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
-                }
-            }
-
-        stage('Create and run docker container') {
-            steps {
-                script {
-                    try {
-                        bat 'chcp 65001 && cd devops-laba2 && docker-compose build'
-                        }
-
-                    finally {
-                    bat '''
-                        chcp 65001
-                        cd devops-laba2
-                        docker-compose up -d
-                        '''
-                        }
-				    }
-                }
-            }
-
-        // use for multi containers:
-        //docker exec %containerId% cd app && coverage run src/unit_tests/test_preprocess.py && coverage run -a src/unit_tests/test_training.py && coverage report -m
-        //use for single container (with auth):
-        //docker run --name devops-laba1_web_1 cd app && coverage run src/unit_tests/test_preprocess.py && coverage run -a src/unit_tests/test_training.py && coverage report -m
-
-        stage('Checkout container logs') {
-            steps {
-                dir("devops-laba2") {
-                        bat '''
-                            docker-compose up -d
-                            for /f %%i in ('docker ps -qf "name=^devops-laba2-web-1"') do set containerId=%%i
-                            echo %containerId%
-                            IF "%containerId%" == "" (
-                                echo "No container running"
-                            )
-                            ELSE (
-                                docker logs --tail 1000 -f %containerId%
-                                )
-                        '''
-                    }
             }
         }
 
-        stage('Checkout coverage report'){
-            steps{
-                dir("devops-laba2"){
+        stage('Build and run') {
+            steps {
+                script {
+                    dir('devops-laba2') {
+                        bat 'docker-compose build'
+                    }
+                    // Берём секретные логин/пароль из Jenkins Credentials
+                    withCredentials([
+                        string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
+                        string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
+                    ]) {
+                        // Передаём все переменные в up
+                        withEnv([
+                            "POSTGRESQL_USER=${POSTGRESQL_USER}",
+                            "POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD}",
+                            "POSTGRESQL_HOST=${POSTGRESQL_HOST}",
+                            "POSTGRESQL_PORT=${POSTGRESQL_PORT}",
+                            "POSTGRESQL_DB=${POSTGRESQL_DB}"
+                        ]) {
+                            dir('devops-laba2') {
+                                bat 'docker-compose up -d'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Check logs') {
+            steps {
+                dir('devops-laba2') {
                     bat '''
-                    docker-compose logs -t --tail 10
+                        for /f %%i in ('docker ps -qf "name=^devops-laba2-web-1"') do set cid=%%i
+                        if not "%cid%"=="" docker logs --tail 50 %cid%
+                        if "%cid%"=="" echo "No container"
                     '''
                 }
             }
@@ -91,11 +84,7 @@ options {
                 bat 'chcp 65001 && docker push nikita123orange/devops-laba2:latest'
             }
         }
-
-        
-
-        
-	}
+    }
 
     post {
         always {
