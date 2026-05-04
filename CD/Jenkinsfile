@@ -2,51 +2,63 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDS=credentials('docker')
+        DOCKERHUB_CREDS = credentials('docker')
         LC_ALL = "en_US.UTF-8"
         LANG    = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
+        // Несекретные параметры БД
+        POSTGRESQL_HOST = "db"   
+        POSTGRESQL_PORT = "5432"
+        POSTGRESQL_DB   = "mydb"
     }
 
-options {
+    options {
         timestamps()
         skipDefaultCheckout(true)
-	}
+    }
+
     stages {
-
-        stage('Login'){
-            steps{
-                //withCredentials([usernamePassword(credentialsId: 'devops-laba1', passwordVariable: 'DOCKER_REGISTRY_PWD', usernameVariable: 'DOCKER_REGISTRY_USER')]){
-                //bat 'chcp 65001 && echo %DOCKER_REGISTRY_PWD% | docker login -u %DOCKER_REGISTRY_USER% --password-stdin'}
-                //bat 'chcp 65001 && echo %DOCKERHUB_CREDS_PSW% | docker login -u %DOCKERHUB_CREDS_USR% --password-stdin'
+        stage('Login to Docker Hub') {
+            steps {
                 bat 'docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
-                }
             }
+        }
 
-        stage('Pull image'){
-            steps{
-                bat '''
-                        docker pull nikita123orange/devops-laba2:latest
-                '''
+        stage('Pull image') {
+            steps {
+                bat 'docker pull nikita123orange/devops-laba2:latest'
             }
         }
 
         stage('Remove old container') {
             steps {
                 script {
-                    bat '(docker stop devops-laba-web-2 || exit 0) && (docker rm devops-laba-web-2 || exit 0)'
+                    bat '(docker stop devops-laba-web-1 || exit 0) && (docker rm devops-laba-web-1 || exit 0)'
                 }
             }
         }
 
-        stage('Run container'){
-            steps{
-                bat '''
-                        docker run --name devops-laba-web-2 -p 8000:8000 -d nikita123orange/devops-laba2:latest
-                '''
+        stage('Run container') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
+                    string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
+                ]) {
+                    bat """
+                        docker run --name devops-laba-web-1 \
+                        -p 8000:8000 \
+                        --network devops-laba2_default \
+                        -e POSTGRESQL_USER=${POSTGRESQL_USER} \
+                        -e POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD} \
+                        -e POSTGRESQL_HOST=${POSTGRESQL_HOST} \
+                        -e POSTGRESQL_PORT=${POSTGRESQL_PORT} \
+                        -e POSTGRESQL_DB=${POSTGRESQL_DB} \
+                        -d nikita123orange/devops-laba2:latest
+                    """
+                }
             }
         }
-	}
+    }
 
     post {
         always {
