@@ -10,6 +10,10 @@ pipeline {
         POSTGRESQL_HOST = "db"
         POSTGRESQL_PORT = "5432"
         POSTGRESQL_DB   = "mydb"
+        // DVC настройки
+        DVC_CACHE_DIR = "C:\\dvc_cache"
+        DVC_REMOTE_NAME = "local_storage"
+        DVC_REMOTE_URL = "C:\\dvc_remote"
     }
 
     options {
@@ -18,9 +22,8 @@ pipeline {
     }
 
     stages {
-        stage('Clone repository (for compose file)') {
+        stage('Clone repository (for compose file and DVC)') {
             steps {
-                // Если директория уже есть – делаем pull, иначе clone
                 bat '''
                     if exist devops-laba2 (
                         cd devops-laba2 && git pull origin main
@@ -28,6 +31,28 @@ pipeline {
                         git clone -b main https://github.com/Nikita-123-orange/devops-laba2.git
                     )
                 '''
+            }
+        }
+
+        stage('Install DVC') {
+            steps {
+                bat 'python -m pip install --upgrade pip'
+                bat 'pip install dvc'
+            }
+        }
+
+        stage('Pull data with DVC') {
+            steps {
+                dir('devops-laba2') {
+                    bat 'if not exist %DVC_CACHE_DIR% mkdir %DVC_CACHE_DIR%'
+                    bat 'if not exist %DVC_REMOTE_URL% mkdir %DVC_REMOTE_URL%'
+                    bat '''
+                        dvc remote add -d %DVC_REMOTE_NAME% %DVC_REMOTE_URL% || echo "Remote already exists"
+                        dvc remote modify %DVC_REMOTE_NAME% --local url %DVC_REMOTE_URL%
+                        set DVC_CACHE_DIR=%DVC_CACHE_DIR%
+                        dvc pull --remote %DVC_REMOTE_NAME%
+                    '''
+                }
             }
         }
 
@@ -46,7 +71,6 @@ pipeline {
         stage('Stop and remove old containers') {
             steps {
                 dir('devops-laba2') {
-                    // Останавливаем и удаляем старые контейнеры, но НЕ удаляем том с данными БД
                     bat 'docker-compose down'
                 }
             }
@@ -56,12 +80,11 @@ pipeline {
             steps {
                 script {
                     dir('devops-laba2') {
-                        // Создаём временный .env файл с секретными переменными
                         withCredentials([
                             string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
                             string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
                         ]) {
-                            // Записываем переменные в .env (будет проигнорирован .gitignore)
+                            // Создаём .env для передачи переменных в docker-compose
                             bat """
                                 echo POSTGRESQL_USER=${POSTGRESQL_USER} > .env
                                 echo POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD} >> .env
@@ -69,7 +92,8 @@ pipeline {
                                 echo POSTGRESQL_PORT=${POSTGRESQL_PORT} >> .env
                                 echo POSTGRESQL_DB=${POSTGRESQL_DB} >> .env
                             """
-                            // Запускаем контейнеры – образ для web уже скачан, пересборки не будет
+                            // Запуск контейнеров. Данные из текущей папки (включая подтянутые DVC) будут смонтированы
+                            // благодаря `volumes: - .:/app` в docker-compose.yml
                             bat 'docker-compose up -d'
                         }
                     }
@@ -77,10 +101,10 @@ pipeline {
             }
         }
 
-        stage('Verify containers are running') {
+        stage('Verify data availability') {
             steps {
                 dir('devops-laba2') {
-                    bat 'docker-compose ps'
+                    bat 'docker exec devops-laba2-web-1 ls -la /app/experiments || echo "experiments not found"'
                 }
             }
         }
@@ -90,7 +114,6 @@ pipeline {
         always {
             node('windows') {
                 bat 'docker logout'
-                // Опционально: удаляем .env файл (чтобы не хранить пароли на диске)
                 bat 'if exist devops-laba2\\.env del devops-laba2\\.env'
             }
         }
