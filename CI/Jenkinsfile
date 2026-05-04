@@ -2,13 +2,17 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDS=credentials('docker')
+        DOCKERHUB_CREDS = credentials('docker')
         LC_ALL = "en_US.UTF-8"
         LANG    = "en_US.UTF-8"
         LANGUAGE = "en_US.UTF-8"
         POSTGRESQL_HOST = "penguin_db"
         POSTGRESQL_PORT = "5432"
         POSTGRESQL_DB = "mydb"
+        // DVC кэш будет храниться на хосте, чтобы не качать данные повторно
+        DVC_CACHE_DIR = "C:\\dvc_cache"
+        DVC_REMOTE_NAME = "local_storage"
+        DVC_REMOTE_URL = "C:\\dvc_remote"
     }
 
     options {
@@ -24,33 +28,61 @@ pipeline {
             }
         }
 
+        stage('Install DVC') {
+            steps {
+                bat 'python -m pip install --upgrade pip'
+                bat 'pip install dvc'
+            }
+        }
+
+        stage('Pull data with DVC') {
+            steps {
+                dir('devops-laba2') {
+                    // Создаём директории для кэша и удалённого хранилища, если их нет
+                    bat 'if not exist %DVC_CACHE_DIR% mkdir %DVC_CACHE_DIR%'
+                    bat 'if not exist %DVC_REMOTE_URL% mkdir %DVC_REMOTE_URL%'
+
+                    // Настраиваем DVC remote (локальную папку) и кэш
+                    bat '''
+                        dvc remote add -d %DVC_REMOTE_NAME% %DVC_REMOTE_URL% || echo "Remote already exists"
+                        dvc remote modify %DVC_REMOTE_NAME% --local url %DVC_REMOTE_URL%
+                        set DVC_CACHE_DIR=%DVC_CACHE_DIR%
+                        dvc pull --remote %DVC_REMOTE_NAME%
+                    '''
+                }
+            }
+        }
+
+        stage('Verify data') {
+            steps {
+                dir('devops-laba2') {
+                    // Показываем содержимое папок, где могут лежать данные (например, data/)
+                    bat 'dir /s data 2>nul || echo "No data folder found"'
+                }
+            }
+        }
         stage('Checkout repo dir') {
             steps {
                 bat 'chcp 65001 && cd devops-laba2 && dir'
 				}
 			}
 
-        stage('Login'){
-            steps{
-                //withCredentials([usernamePassword(credentialsId: 'devops-laba1', passwordVariable: 'DOCKER_REGISTRY_PWD', usernameVariable: 'DOCKER_REGISTRY_USER')]){
-                //bat 'chcp 65001 && echo %DOCKER_REGISTRY_PWD% | docker login -u %DOCKER_REGISTRY_USER% --password-stdin'}
-                //bat 'chcp 65001 && echo %DOCKERHUB_CREDS_PSW% | docker login -u %DOCKERHUB_CREDS_USR% --password-stdin'
+        stage('Login to Docker Hub') {
+            steps {
                 bat 'chcp 65001 && docker login -u %DOCKERHUB_CREDS_USR% -p %DOCKERHUB_CREDS_PSW%'
             }
         }
 
-        stage('Build and run') {
+        stage('Build and run containers') {
             steps {
                 script {
                     dir('devops-laba2') {
                         bat 'docker-compose build'
                     }
-                    // Берём секретные логин/пароль из Jenkins Credentials
                     withCredentials([
                         string(credentialsId: 'postgres-user', variable: 'POSTGRESQL_USER'),
                         string(credentialsId: 'postgres-password', variable: 'POSTGRESQL_PASSWORD')
                     ]) {
-                        // Передаём все переменные в up
                         withEnv([
                             "POSTGRESQL_USER=${POSTGRESQL_USER}",
                             "POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD}",
@@ -67,21 +99,21 @@ pipeline {
             }
         }
 
-        stage('Check logs') {
+        stage('Check application logs') {
             steps {
                 dir('devops-laba2') {
                     bat '''
                         for /f %%i in ('docker ps -qf "name=^devops-laba2-web-1"') do set cid=%%i
                         if not "%cid%"=="" docker logs --tail 50 %cid%
-                        if "%cid%"=="" echo "No container"
+                        if "%cid%"=="" echo "No container running"
                     '''
                 }
             }
         }
 
-        stage('Push'){
-            steps{
-                bat 'chcp 65001 && docker push nikita123orange/devops-laba2:latest'
+        stage('Push Docker image') {
+            steps {
+                bat 'docker push nikita123orange/devops-laba2:latest'
             }
         }
     }
@@ -89,7 +121,7 @@ pipeline {
     post {
         always {
             node('windows') {
-                bat 'chcp 65001 && docker logout'
+                bat 'docker logout'
             }
         }
     }
